@@ -9,7 +9,14 @@ the portal's own web pages use (server-rendered HTML) and parses the
 results. It only reads from `myehalal.halal.gov.my`; it doesn't submit
 anything.
 
-## Build & run
+## Install
+
+**Arch Linux (AUR):** `yay -S cekhalal` or `paru -S cekhalal` (or
+manually: `git clone https://aur.archlinux.org/cekhalal.git && cd cekhalal
+&& makepkg -si`). The `PKGBUILD` is maintained in
+[`packaging/aur/`](packaging/aur/) in this repo.
+
+**From source (any platform with Rust):**
 
 ```sh
 cargo build --release
