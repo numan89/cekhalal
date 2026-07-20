@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Terminal UI to search Malaysia's official JAKIM halal directory (MyeHalal)"
 license = "MIT"
+repository = "https://github.com/numanadvansoft/cekhalal"
 
 [dependencies]
 ratatui = "0.30"
