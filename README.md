@@ -135,3 +135,7 @@ A few things worth knowing if you're poking at the code:
   site). This isn't obvious from the site's own search form, which only
   ever sends `category`; the `ty` switch is set by JS when clicking the
   "Produk" results tab.
+
+## License
+
+[MIT](LICENSE)
