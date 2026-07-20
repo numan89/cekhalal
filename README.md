@@ -47,9 +47,20 @@ main search box — you never have to touch them:
 
 ### Keys
 
-- **Tab** / **Shift+Tab** — cycle focus: Search → Mode → State → Category
-  → Results (**l**/**Enter** from Results also jumps straight into
-  Preview)
+The main flow is a simple three-stop loop — **Tab** / **Shift+Tab**
+cycle **Search → Results → Preview → Search**, in either direction, and
+that's the whole primary mental model. Mode/State/Category live off to
+the side and are one shortcut away from *anywhere*, no matter which of
+the three you're currently in:
+
+- **Alt+1** — Mode (Combined / Company / Product)
+- **Alt+2** — State
+- **Alt+3** — Category
+
+Once jumped to one of those, **←/→** (or h/l) changes its value, **Enter**
+runs the search and drops you back at Results, and **Esc** (or Tab)
+also returns to Results without searching.
+
 - **/** — jump to the search box from anywhere (except from inside
   Preview, see below)
 - In the **search box** — full line editing, not just append/backspace:
@@ -62,21 +73,15 @@ main search box — you never have to touch them:
   - **Ctrl+U** kills from the cursor to the start of the line, **Ctrl+K**
     to the end
   - **Enter** to search, **Esc** to leave the field without losing your query
-- In the **Mode** field: **←/→** (or h/l) to cycle Combined → Company →
-  Product, **Enter** to re-run the search
-- In the **State** / **Category** filters: **←/→** (or h/l) to change,
-  **Enter** to re-run the search with the new filter
 - In the **results list**: **↑/↓** (or j/k) to move (the preview pane
-  updates as you go), **l**/**Enter** to focus the preview for
-  scrolling/filtering, **n/p** (or PageDown/PageUp) for next/previous
+  updates as you go), **n/p** (or PageDown/PageUp) for next/previous
   page, **q**/**Esc** to quit
 - In the **preview pane**: **↑/↓** (or j/k) to scroll, **/** to type an
   incremental filter over the company's **product list** (matches name or
   brand, live, like ranger's in-pane search — handy when a certificate
   has 30+ products and you want the one you searched for), **Enter** to
   keep the filter applied and stop typing, **Esc** to clear the filter
-  (press again to go back to Results), **h**/**Left** also returns to
-  Results
+  (press again to go back to Results)
 - **Ctrl+C** quits from anywhere
 
 ## How it works

@@ -102,7 +102,7 @@ fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(focus_style(mode_active))
-                .title("Mode (\u{2190}/\u{2192}, optional)"),
+                .title("Mode (Alt+1)"),
         );
     f.render_widget(mode_widget, cols[1]);
 
@@ -111,7 +111,7 @@ fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(focus_style(state_active))
-            .title("State (\u{2190}/\u{2192}, optional)"),
+            .title("State (Alt+2)"),
     );
     f.render_widget(state_widget, cols[2]);
 
@@ -120,7 +120,7 @@ fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
     let (cat_text, cat_title) = if category_locked {
         ("Produk Makanan / Minuman", "Category (fixed for product search)")
     } else {
-        (CATEGORIES[app.category_idx].1, "Category (\u{2190}/\u{2192}, optional)")
+        (CATEGORIES[app.category_idx].1, "Category (Alt+3)")
     };
     let cat_widget = Paragraph::new(cat_text)
         .style(if category_locked { Style::default().fg(Color::DarkGray) } else { Style::default() })
@@ -155,8 +155,8 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
         vec![ListItem::new(
             "Type a name and press Enter to search \u{2014} matches both\n\
              companies and products at once (tagged CO / PR below).\n\
-             Mode/State/Category (Tab from Search) narrow things down\n\
-             further, but are entirely optional.\n\
+             Tab cycles Search / Results / Preview. Alt+1/2/3 jump to\n\
+             Mode/State/Category to narrow down \u{2014} entirely optional.\n\
              The preview pane on the right shows details live as you move.",
         )]
     } else if app.results.is_empty() {
@@ -329,12 +329,16 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let help = match app.focus {
-        Focus::Search => "type to search (Alt+\u{2190}word Ctrl+W del-word Home/End)  Enter search  Esc leave field  Tab next  Ctrl+C quit",
-        Focus::ModeFilter => "\u{2190}/\u{2192} cycle Combined/Company/Product  Enter search  Tab next  Ctrl+C quit",
-        Focus::StateFilter | Focus::CategoryFilter => "\u{2190}/\u{2192} change  Enter search  Tab next  Esc results  Ctrl+C quit",
-        Focus::Results => "\u{2191}/\u{2193} move  l/Enter preview  n/p page  / search  q quit",
+        Focus::Search => {
+            "type to search (Alt+\u{2190}word Ctrl+W del-word Home/End)  Enter search  Tab\u{2192}Results  Alt+1/2/3 Mode/State/Category  Ctrl+C quit"
+        }
+        Focus::ModeFilter => "\u{2190}/\u{2192} cycle Combined/Company/Product  Enter search  Esc/Tab\u{2192}Results",
+        Focus::StateFilter | Focus::CategoryFilter => "\u{2190}/\u{2192} change  Enter search  Esc/Tab\u{2192}Results",
+        Focus::Results => {
+            "\u{2191}/\u{2193} move  Tab\u{2192}Preview  n/p page  / search  Alt+1/2/3 Mode/State/Category  q quit"
+        }
         Focus::Preview if app.product_filter_active => "type to filter products  Enter apply  Esc cancel",
-        Focus::Preview => "\u{2191}/\u{2193} scroll  / filter products  h/Esc back  q quit",
+        Focus::Preview => "\u{2191}/\u{2193} scroll  / filter products  Tab\u{2192}Search  h/Esc\u{2192}Results  q quit",
     };
     f.render_widget(
         Paragraph::new(help).style(Style::default().fg(Color::DarkGray)),

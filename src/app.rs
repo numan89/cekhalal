@@ -259,6 +259,27 @@ impl App {
             return Action::Quit;
         }
 
+        // Mode/State/Category are one Alt+digit away from anywhere, so the
+        // main Tab cycle can stay a simple three-stop loop (Search →
+        // Results → Preview) without also having to pass through these.
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            match key.code {
+                KeyCode::Char('1') => {
+                    self.focus = Focus::ModeFilter;
+                    return Action::None;
+                }
+                KeyCode::Char('2') => {
+                    self.focus = Focus::StateFilter;
+                    return Action::None;
+                }
+                KeyCode::Char('3') => {
+                    self.focus = Focus::CategoryFilter;
+                    return Action::None;
+                }
+                _ => {}
+            }
+        }
+
         if key.code == KeyCode::Char('/') && self.focus != Focus::Search && self.focus != Focus::Preview {
             self.focus = Focus::Search;
             return Action::None;
@@ -281,11 +302,11 @@ impl App {
                 return Action::None;
             }
             KeyCode::Tab => {
-                self.focus = Focus::ModeFilter;
+                self.focus = Focus::Results;
                 return Action::None;
             }
             KeyCode::BackTab => {
-                self.focus = Focus::Results;
+                self.focus = Focus::Preview;
                 return Action::None;
             }
             KeyCode::Enter => {
@@ -300,13 +321,12 @@ impl App {
 
     fn handle_key_mode_filter(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Esc => self.focus = Focus::Results,
-            KeyCode::Tab => self.focus = Focus::StateFilter,
-            KeyCode::BackTab => self.focus = Focus::Search,
+            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Results,
             KeyCode::Left | KeyCode::Char('h') => self.search_mode = self.search_mode.prev(),
             KeyCode::Right | KeyCode::Char('l') => self.search_mode = self.search_mode.next(),
             KeyCode::Enter => {
                 self.page = 1;
+                self.focus = Focus::Results;
                 return self.trigger_search();
             }
             _ => {}
@@ -316,9 +336,7 @@ impl App {
 
     fn handle_key_state_filter(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Esc => self.focus = Focus::Results,
-            KeyCode::Tab => self.focus = Focus::CategoryFilter,
-            KeyCode::BackTab => self.focus = Focus::ModeFilter,
+            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Results,
             KeyCode::Left | KeyCode::Char('h') => {
                 self.state_idx = self.state_idx.checked_sub(1).unwrap_or(STATES.len() - 1);
             }
@@ -327,6 +345,7 @@ impl App {
             }
             KeyCode::Enter => {
                 self.page = 1;
+                self.focus = Focus::Results;
                 return self.trigger_search();
             }
             _ => {}
@@ -337,9 +356,7 @@ impl App {
     fn handle_key_category_filter(&mut self, key: KeyEvent) -> Action {
         let category_locked = self.search_mode == SearchMode::Product;
         match key.code {
-            KeyCode::Esc => self.focus = Focus::Results,
-            KeyCode::Tab => self.focus = Focus::Results,
-            KeyCode::BackTab => self.focus = Focus::StateFilter,
+            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Results,
             KeyCode::Left | KeyCode::Char('h') if !category_locked => {
                 self.category_idx = self.category_idx.checked_sub(1).unwrap_or(CATEGORIES.len() - 1);
             }
@@ -348,6 +365,7 @@ impl App {
             }
             KeyCode::Enter => {
                 self.page = 1;
+                self.focus = Focus::Results;
                 return self.trigger_search();
             }
             _ => {}
@@ -358,8 +376,8 @@ impl App {
     fn handle_key_results(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return Action::Quit,
-            KeyCode::Tab => self.focus = Focus::Search,
-            KeyCode::BackTab => self.focus = Focus::CategoryFilter,
+            KeyCode::Tab => self.focus = Focus::Preview,
+            KeyCode::BackTab => self.focus = Focus::Search,
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => {
@@ -406,6 +424,8 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => return Action::Quit,
+            KeyCode::Tab => self.focus = Focus::Search,
+            KeyCode::BackTab => self.focus = Focus::Results,
             KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
                 if !self.product_filter.is_empty() {
                     self.product_filter.clear();
