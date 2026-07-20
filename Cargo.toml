@@ -1,0 +1,19 @@
+[package]
+name = "cekhalal"
+version = "0.1.0"
+edition = "2024"
+description = "Terminal UI to search Malaysia's official JAKIM halal directory (MyeHalal)"
+license = "MIT"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
+scraper = "0.27"
+regex = "1"
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
