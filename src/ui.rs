@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, Focus};
+use crate::app::{App, Focus, SearchMode};
 use crate::jakim::{CATEGORIES, STATES};
 
 const ACCENT: Color = Color::Green;
@@ -55,14 +55,20 @@ fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(50),
-            Constraint::Percentage(25),
+            Constraint::Percentage(38),
+            Constraint::Percentage(17),
+            Constraint::Percentage(20),
             Constraint::Percentage(25),
         ])
         .split(area);
 
     let search_active = app.focus == Focus::Search;
-    let search_title = if search_active { "Search (Enter to run, Esc to leave)" } else { "Search (press / )" };
+    let search_title = match app.search_mode {
+        SearchMode::Company if search_active => "Search company (Enter to run, Esc to leave)",
+        SearchMode::Company => "Search company (press / )",
+        SearchMode::Product if search_active => "Search product (Enter to run, Esc to leave)",
+        SearchMode::Product => "Search product (press / )",
+    };
     let cursor = if search_active { "█" } else { "" };
     let search_text = format!("{}{}", app.input, cursor);
     let search = Paragraph::new(search_text).block(
@@ -73,6 +79,15 @@ fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
     );
     f.render_widget(search, cols[0]);
 
+    let mode_active = app.focus == Focus::ModeFilter;
+    let mode_widget = Paragraph::new(app.search_mode.label()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(focus_style(mode_active))
+            .title("Mode (\u{2190}/\u{2192})"),
+    );
+    f.render_widget(mode_widget, cols[1]);
+
     let state_active = app.focus == Focus::StateFilter;
     let state_widget = Paragraph::new(STATES[app.state_idx].1).block(
         Block::default()
@@ -80,16 +95,24 @@ fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
             .border_style(focus_style(state_active))
             .title("State (\u{2190}/\u{2192})"),
     );
-    f.render_widget(state_widget, cols[1]);
+    f.render_widget(state_widget, cols[2]);
 
     let cat_active = app.focus == Focus::CategoryFilter;
-    let cat_widget = Paragraph::new(CATEGORIES[app.category_idx].1).block(
+    let (cat_text, cat_title) = match app.search_mode {
+        SearchMode::Company => (CATEGORIES[app.category_idx].1, "Category (\u{2190}/\u{2192})"),
+        SearchMode::Product => ("Produk Makanan / Minuman", "Category (fixed for product search)"),
+    };
+    let cat_widget = Paragraph::new(cat_text).style(if app.search_mode == SearchMode::Product {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default()
+    }).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(focus_style(cat_active))
-            .title("Category (\u{2190}/\u{2192})"),
+            .title(cat_title),
     );
-    f.render_widget(cat_widget, cols[2]);
+    f.render_widget(cat_widget, cols[3]);
 }
 
 fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
@@ -104,9 +127,11 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
         )))]
     } else if !app.searched_once {
         vec![ListItem::new(
-            "Type a company name and press Enter to search.\n\
-             Tab cycles Search / State / Category / Results.\n\
-             The preview pane on the right shows products live as you move.",
+            "Type a name and press Enter to search.\n\
+             Mode: Company (search by company name) or Product\n\
+             (search by product/brand name, e.g. \"Milo\") \u{2014} toggle it\n\
+             with the Mode field (Tab from Search).\n\
+             The preview pane on the right shows details live as you move.",
         )]
     } else if app.results.is_empty() {
         vec![ListItem::new("No results for this search.")]
@@ -120,8 +145,9 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().add_modifier(Modifier::BOLD),
                 ))];
                 if !r.address.is_empty() {
+                    let prefix = if app.search_mode == SearchMode::Product { "Company: " } else { "" };
                     lines.push(Line::from(Span::styled(
-                        format!("  {}", r.address),
+                        format!("  {prefix}{}", r.address),
                         Style::default().fg(Color::DarkGray),
                     )));
                 }
@@ -131,14 +157,16 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(Color::Yellow),
                     )));
                 }
-                lines.push(Line::from(Span::styled(
+                let expiry_line = if app.search_mode == SearchMode::Product {
+                    format!("  expires {soonest}")
+                } else {
                     format!(
                         "  expiry {soonest}  ({} cert entr{})",
                         r.expiry_dates.len(),
                         if r.expiry_dates.len() == 1 { "y" } else { "ies" }
-                    ),
-                    Style::default().fg(Color::Cyan),
-                )));
+                    )
+                };
+                lines.push(Line::from(Span::styled(expiry_line, Style::default().fg(Color::Cyan))));
                 ListItem::new(lines)
             })
             .collect()
@@ -267,6 +295,7 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let help = match app.focus {
         Focus::Search => "type to search  Enter search  Esc leave field  Tab next  Ctrl+C quit",
+        Focus::ModeFilter => "\u{2190}/\u{2192} toggle Company/Product search  Enter search  Tab next  Ctrl+C quit",
         Focus::StateFilter | Focus::CategoryFilter => "\u{2190}/\u{2192} change  Enter search  Tab next  Esc results  Ctrl+C quit",
         Focus::Results => "\u{2191}/\u{2193} move  l/Enter preview  n/p page  / search  q quit",
         Focus::Preview if app.product_filter_active => "type to filter products  Enter apply  Esc cancel",

@@ -137,6 +137,38 @@ impl JakimClient {
         parse_search_page(&body, page)
     }
 
+    /// Search food/drink *products* by name, across every company —
+    /// distinct from `search()`, which only ever matches company names.
+    ///
+    /// The portal exposes this as the "Produk" tab on its results page,
+    /// backed by a completely different query (`directory_halal_produk.php`)
+    /// than the default company listing. It only works when `category` is
+    /// pinned to `"PR"` (Produk Makanan/Minuman) *and* `ty=PR` is sent —
+    /// either alone throws a server-side fatal error (confirmed against the
+    /// live site), so both are hardcoded here rather than exposed as
+    /// parameters.
+    pub async fn search_products(&self, keyword: &str, state: &str, page: u32) -> Result<SearchPage> {
+        let page = page.max(1);
+        let resp = self
+            .http
+            .get(SEARCH_URL)
+            .query(&[
+                ("data", DATA_PARAM),
+                ("negeri", state),
+                ("category", "PR"),
+                ("cari", keyword),
+                ("page", &page.to_string()),
+                ("ty", "PR"),
+            ])
+            .send()
+            .await
+            .context("request to MyeHalal product search failed")?
+            .error_for_status()
+            .context("MyeHalal product search returned an error status")?;
+        let body = resp.text().await.context("failed to read response body")?;
+        parse_product_search_page(&body, page)
+    }
+
     pub async fn detail(&self, comp_code: &str, type_: &str, ty: &str) -> Result<CompanyDetail> {
         let resp = self
             .http
@@ -209,6 +241,24 @@ fn sel(css: &str) -> Selector {
     Selector::parse(css).expect("static selector")
 }
 
+/// Parses the "Total Record : N - Page P From T" footer common to both the
+/// company and product search result pages.
+fn parse_pagination(doc: &Html, requested_page: u32, result_count: usize) -> (u32, u32, u32) {
+    let full_text = doc.root_element().text().collect::<Vec<_>>().join(" ");
+    match total_re().captures(&full_text) {
+        Some(c) => (
+            c[1].parse().unwrap_or(result_count as u32),
+            c[2].parse().unwrap_or(requested_page),
+            c[3].parse().unwrap_or(1).max(1),
+        ),
+        None => (
+            result_count as u32,
+            requested_page,
+            if result_count == 0 { 0 } else { 1 },
+        ),
+    }
+}
+
 fn parse_search_page(html: &str, requested_page: u32) -> Result<SearchPage> {
     let doc = Html::parse_document(html);
     let row_sel = sel("tr[onclick]");
@@ -267,19 +317,89 @@ fn parse_search_page(html: &str, requested_page: u32) -> Result<SearchPage> {
         });
     }
 
-    let full_text = doc.root_element().text().collect::<Vec<_>>().join(" ");
-    let (total_records, page, total_pages) = match total_re().captures(&full_text) {
-        Some(c) => (
-            c[1].parse().unwrap_or(results.len() as u32),
-            c[2].parse().unwrap_or(requested_page),
-            c[3].parse().unwrap_or(1).max(1),
-        ),
-        None => (
-            results.len() as u32,
-            requested_page,
-            if results.is_empty() { 0 } else { 1 },
-        ),
-    };
+    let (total_records, page, total_pages) = parse_pagination(&doc, requested_page, results.len());
+
+    Ok(SearchPage {
+        results,
+        page,
+        total_pages,
+        total_records,
+    })
+}
+
+fn product_onclick_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"comp_code=([^&']+)&type=([^&']+)").expect("static regex"))
+}
+
+/// Product-tab rows use the same `company-name`/`company-brand`/
+/// `company-address` CSS classes as the company table, but they hold
+/// different data here: product name, "JENAMA: <brand>", and the owning
+/// company's name respectively. Reused into `SearchResult` (name = product,
+/// address = company, a single-element expiry list) so the rest of the app
+/// — list rendering, selection, preview fetch — needs no product-specific
+/// code path.
+fn parse_product_search_page(html: &str, requested_page: u32) -> Result<SearchPage> {
+    let doc = Html::parse_document(html);
+    let row_sel = sel("tr[onclick]");
+    let td_sel = sel("td");
+    let name_sel = sel("span.company-name");
+    let addr_sel = sel("span.company-address");
+    let brand_sel = sel("span.company-brand");
+
+    let mut results = Vec::new();
+    for row in doc.select(&row_sel) {
+        let onclick = row.value().attr("onclick").unwrap_or_default();
+        let Some(caps) = product_onclick_re().captures(onclick) else {
+            continue;
+        };
+        let comp_code = caps[1].to_string();
+        let type_ = caps[2].to_string();
+
+        let tds: Vec<_> = row.select(&td_sel).collect();
+        if tds.len() < 3 {
+            continue;
+        }
+
+        let product_name = tds[1]
+            .select(&name_sel)
+            .next()
+            .map(extract_lines)
+            .unwrap_or_default()
+            .join(" ");
+        let company_name = tds[1]
+            .select(&addr_sel)
+            .next()
+            .map(extract_lines)
+            .unwrap_or_default()
+            .join(", ");
+        let brand = tds[1]
+            .select(&brand_sel)
+            .next()
+            .map(extract_lines)
+            .unwrap_or_default()
+            .join(", ")
+            .trim_start_matches("JENAMA:")
+            .trim()
+            .to_string();
+        let expiry_dates = extract_lines(tds[2]);
+
+        if product_name.is_empty() {
+            continue;
+        }
+
+        results.push(SearchResult {
+            comp_code,
+            type_,
+            ty: String::new(),
+            name: product_name,
+            address: company_name,
+            brand,
+            expiry_dates,
+        });
+    }
+
+    let (total_records, page, total_pages) = parse_pagination(&doc, requested_page, results.len());
 
     Ok(SearchPage {
         results,
@@ -375,6 +495,26 @@ mod tests {
         assert!(first.address.contains("PETALING JAYA"));
         assert_eq!(first.expiry_dates.len(), 6);
         assert_eq!(first.expiry_dates[0], "29/02/2028");
+    }
+
+    #[test]
+    fn parses_product_search_results_page() {
+        let html = include_str!("../tests/fixtures/jakim_product_search.html");
+        let page = parse_product_search_page(html, 1).expect("should parse");
+
+        assert_eq!(page.total_records, 172);
+        assert_eq!(page.page, 1);
+        assert_eq!(page.total_pages, 9);
+        assert!(!page.results.is_empty());
+
+        let first = &page.results[0];
+        assert_eq!(first.type_, "C");
+        assert!(first.ty.is_empty());
+        assert!(first.name.contains("NESTLE"));
+        assert!(first.name.contains("MILO"));
+        assert_eq!(first.brand, "NESTLE/MILO");
+        assert!(first.address.contains("NESTLE MANUFACTURING"));
+        assert_eq!(first.expiry_dates.len(), 1);
     }
 
     #[test]

@@ -8,6 +8,7 @@ use crate::jakim::{CompanyDetail, SearchPage, SearchResult, CATEGORIES, STATES};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Search,
+    ModeFilter,
     StateFilter,
     CategoryFilter,
     Results,
@@ -15,6 +16,32 @@ pub enum Focus {
     /// highlighted company, or typing an incremental filter over its
     /// product list.
     Preview,
+}
+
+/// Which of the portal's two independent search backends to query.
+/// `Company` matches company/premise names (the default directory search);
+/// `Product` matches food/drink *product* names across every company — a
+/// separate query the portal only exposes when category is pinned to "PR".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchMode {
+    Company,
+    Product,
+}
+
+impl SearchMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            SearchMode::Company => "Company",
+            SearchMode::Product => "Product",
+        }
+    }
+
+    fn toggled(self) -> Self {
+        match self {
+            SearchMode::Company => SearchMode::Product,
+            SearchMode::Product => SearchMode::Company,
+        }
+    }
 }
 
 /// What the caller (main.rs) should do after a key press. Keeps App free of
@@ -36,6 +63,7 @@ pub enum AppEvent {
 
 pub struct App {
     pub input: String,
+    pub search_mode: SearchMode,
     pub state_idx: usize,
     pub category_idx: usize,
     pub focus: Focus,
@@ -72,6 +100,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             input: String::new(),
+            search_mode: SearchMode::Company,
             state_idx: 0,
             category_idx: 0,
             focus: Focus::Search,
@@ -197,6 +226,7 @@ impl App {
 
         match self.focus {
             Focus::Search => self.handle_key_search(key),
+            Focus::ModeFilter => self.handle_key_mode_filter(key),
             Focus::StateFilter => self.handle_key_state_filter(key),
             Focus::CategoryFilter => self.handle_key_category_filter(key),
             Focus::Results => self.handle_key_results(key),
@@ -207,7 +237,7 @@ impl App {
     fn handle_key_search(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Esc => self.focus = Focus::Results,
-            KeyCode::Tab => self.focus = Focus::StateFilter,
+            KeyCode::Tab => self.focus = Focus::ModeFilter,
             KeyCode::BackTab => self.focus = Focus::Results,
             KeyCode::Enter => {
                 self.page = 1;
@@ -222,11 +252,28 @@ impl App {
         Action::None
     }
 
+    fn handle_key_mode_filter(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => self.focus = Focus::Results,
+            KeyCode::Tab => self.focus = Focus::StateFilter,
+            KeyCode::BackTab => self.focus = Focus::Search,
+            KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') => {
+                self.search_mode = self.search_mode.toggled();
+            }
+            KeyCode::Enter => {
+                self.page = 1;
+                return Action::RunSearch;
+            }
+            _ => {}
+        }
+        Action::None
+    }
+
     fn handle_key_state_filter(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Esc => self.focus = Focus::Results,
             KeyCode::Tab => self.focus = Focus::CategoryFilter,
-            KeyCode::BackTab => self.focus = Focus::Search,
+            KeyCode::BackTab => self.focus = Focus::ModeFilter,
             KeyCode::Left | KeyCode::Char('h') => {
                 self.state_idx = self.state_idx.checked_sub(1).unwrap_or(STATES.len() - 1);
             }
@@ -247,10 +294,10 @@ impl App {
             KeyCode::Esc => self.focus = Focus::Results,
             KeyCode::Tab => self.focus = Focus::Results,
             KeyCode::BackTab => self.focus = Focus::StateFilter,
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Left | KeyCode::Char('h') if self.search_mode == SearchMode::Company => {
                 self.category_idx = self.category_idx.checked_sub(1).unwrap_or(CATEGORIES.len() - 1);
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right | KeyCode::Char('l') if self.search_mode == SearchMode::Company => {
                 self.category_idx = (self.category_idx + 1) % CATEGORIES.len();
             }
             KeyCode::Enter => {

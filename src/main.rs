@@ -14,7 +14,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use app::{Action, App, AppEvent};
+use app::{Action, App, AppEvent, SearchMode};
 use jakim::JakimClient;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -98,14 +98,24 @@ fn dispatch(action: Action, app: &mut App, client: &Arc<JakimClient>, tx: &mpsc:
             app.error = None;
             let keyword = app.input.clone();
             let state = app.state_code().to_string();
-            let category = app.category_code().to_string();
             let page = app.page;
             let client = client.clone();
             let tx = tx.clone();
-            tokio::spawn(async move {
-                let res = client.search(&keyword, &state, &category, page).await;
-                let _ = tx.send(AppEvent::SearchResult(res));
-            });
+            match app.search_mode {
+                SearchMode::Company => {
+                    let category = app.category_code().to_string();
+                    tokio::spawn(async move {
+                        let res = client.search(&keyword, &state, &category, page).await;
+                        let _ = tx.send(AppEvent::SearchResult(res));
+                    });
+                }
+                SearchMode::Product => {
+                    tokio::spawn(async move {
+                        let res = client.search_products(&keyword, &state, page).await;
+                        let _ = tx.send(AppEvent::SearchResult(res));
+                    });
+                }
+            }
         }
     }
 }
