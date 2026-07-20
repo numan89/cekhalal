@@ -131,8 +131,10 @@ impl TextField {
     ///
     /// Word-wise delete follows common terminal conventions: Alt+Backspace
     /// and Ctrl+Backspace both delete the previous word (terminals disagree
-    /// on which modifier they report for that chord, so both are accepted),
-    /// as does the readline standby Ctrl+W.
+    /// on which modifier they report for that chord, so both are accepted).
+    /// Ctrl+W deliberately deviates from the readline norm (delete-word) and
+    /// clears the whole field instead — a quicker "start over" for a search
+    /// box than a line editor.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -148,7 +150,7 @@ impl TextField {
             KeyCode::Delete if alt || ctrl => self.delete_word_forward(),
             KeyCode::Backspace => self.backspace(),
             KeyCode::Delete => self.delete_forward(),
-            KeyCode::Char('w') if ctrl => self.delete_word_backward(),
+            KeyCode::Char('w') if ctrl => self.clear(),
             KeyCode::Char('d') if alt => self.delete_word_forward(),
             KeyCode::Char('a') if ctrl => self.move_home(),
             KeyCode::Char('e') if ctrl => self.move_end(),
@@ -178,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn word_backward_delete_matches_shell_semantics() {
+    fn alt_backspace_deletes_previous_word() {
         let mut f = TextField::new();
         for c in "search milo product".chars() {
             f.insert_char(c);
@@ -186,8 +188,20 @@ mod tests {
         assert!(f.handle_key(key(KeyCode::Backspace, KeyModifiers::ALT)));
         assert_eq!(f.as_string(), "search milo ");
 
-        assert!(f.handle_key(key(KeyCode::Char('w'), KeyModifiers::CONTROL)));
+        assert!(f.handle_key(key(KeyCode::Backspace, KeyModifiers::CONTROL)));
         assert_eq!(f.as_string(), "search ");
+    }
+
+    #[test]
+    fn ctrl_w_clears_the_whole_field() {
+        let mut f = TextField::new();
+        for c in "nestle milo".chars() {
+            f.insert_char(c);
+        }
+        f.move_left();
+        assert!(f.handle_key(key(KeyCode::Char('w'), KeyModifiers::CONTROL)));
+        assert!(f.is_empty());
+        assert_eq!(f.cursor, 0);
     }
 
     #[test]

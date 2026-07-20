@@ -47,11 +47,16 @@ main search box — you never have to touch them:
 
 ### Keys
 
-The main flow is a simple three-stop loop — **Tab** / **Shift+Tab**
-cycle **Search → Results → Preview → Search**, in either direction, and
-that's the whole primary mental model. Mode/State/Category live off to
-the side and are one shortcut away from *anywhere*, no matter which of
-the three you're currently in:
+The main flow is just two stops — **Tab** (either direction, Shift+Tab
+is the same here) switches between **Search** and **Results**. Preview
+is a step *off* that loop, not part of it: it only ever gets focus when
+you press **Enter** on a highlighted result, and from inside Preview,
+**Tab** always takes you straight back to **Search** (not Results) while
+**Enter** always takes you back to **Results** (not Search) — so Tab and
+Enter never leave you guessing which of the two you'll land on.
+
+Mode/State/Category live off to the side and are one shortcut away from
+*anywhere*, regardless of which of the above you're currently in:
 
 - **Alt+1** — Mode (Combined / Company / Product)
 - **Alt+2** — State
@@ -65,23 +70,28 @@ also returns to Results without searching.
   Preview, see below)
 - In the **search box** — full line editing, not just append/backspace:
   - type to insert at the cursor; **←/→** move the cursor; **Home**/**End**
-    jump to start/end
-  - **Alt+Backspace**, **Ctrl+Backspace**, or **Ctrl+W** delete the
-    previous word; **Alt+D** deletes the next word
+    (the physical Home/End keys) jump the cursor to the start/end of the
+    line — handy after using ←/→ or Alt+←/→ to edit in the middle of a
+    query, so you don't have to hold an arrow key to get back to the end
+  - **Alt+Backspace** or **Ctrl+Backspace** delete the previous word,
+    **Alt+D** the next word (terminals disagree on which modifier they
+    report for word-delete chords, so both Alt and Ctrl are accepted)
+  - **Ctrl+W** clears the entire field, not just one word — a faster
+    "start over" than repeated word-deletes
   - **Alt+←/→** (or **Alt+B**/**Alt+F**) move by word; **Ctrl+A**/**Ctrl+E**
     also jump to start/end
   - **Ctrl+U** kills from the cursor to the start of the line, **Ctrl+K**
     to the end
   - **Enter** to search, **Esc** to leave the field without losing your query
 - In the **results list**: **↑/↓** (or j/k) to move (the preview pane
-  updates as you go), **n/p** (or PageDown/PageUp) for next/previous
-  page, **q**/**Esc** to quit
+  updates as you go), **Enter** on a result to focus the preview,
+  **n/p** (or PageDown/PageUp) for next/previous page, **q**/**Esc** to quit
 - In the **preview pane**: **↑/↓** (or j/k) to scroll, **/** to type an
   incremental filter over the company's **product list** (matches name or
   brand, live, like ranger's in-pane search — handy when a certificate
-  has 30+ products and you want the one you searched for), **Enter** to
-  keep the filter applied and stop typing, **Esc** to clear the filter
-  (press again to go back to Results)
+  has 30+ products and you want the one you searched for), **Enter**
+  while typing the filter keeps it applied and stops typing; **Enter**
+  otherwise (or **h**/**Esc**) returns to Results
 - **Ctrl+C** quits from anywhere
 
 ## How it works

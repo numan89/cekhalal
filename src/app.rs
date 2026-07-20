@@ -301,12 +301,8 @@ impl App {
                 self.focus = Focus::Results;
                 return Action::None;
             }
-            KeyCode::Tab => {
+            KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = Focus::Results;
-                return Action::None;
-            }
-            KeyCode::BackTab => {
-                self.focus = Focus::Preview;
                 return Action::None;
             }
             KeyCode::Enter => {
@@ -376,11 +372,10 @@ impl App {
     fn handle_key_results(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return Action::Quit,
-            KeyCode::Tab => self.focus = Focus::Preview,
-            KeyCode::BackTab => self.focus = Focus::Search,
+            KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Search,
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => {
+            KeyCode::Enter => {
                 if self.selected_result().is_some() {
                     self.focus = Focus::Preview;
                 }
@@ -424,8 +419,8 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => return Action::Quit,
-            KeyCode::Tab => self.focus = Focus::Search,
-            KeyCode::BackTab => self.focus = Focus::Results,
+            KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Search,
+            KeyCode::Enter => self.focus = Focus::Results,
             KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
                 if !self.product_filter.is_empty() {
                     self.product_filter.clear();
