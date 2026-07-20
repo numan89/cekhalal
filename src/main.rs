@@ -1,5 +1,6 @@
 mod app;
 mod jakim;
+mod text_field;
 mod ui;
 
 use std::io::{self, Stdout};
@@ -94,25 +95,30 @@ fn dispatch(action: Action, app: &mut App, client: &Arc<JakimClient>, tx: &mpsc:
         Action::None => {}
         Action::Quit => app.should_quit = true,
         Action::RunSearch => {
-            app.loading = true;
-            app.error = None;
-            let keyword = app.input.clone();
+            let generation = app.search_generation();
+            let keyword = app.input.as_string();
             let state = app.state_code().to_string();
+            let category = app.category_code().to_string();
             let page = app.page;
             let client = client.clone();
             let tx = tx.clone();
             match app.search_mode {
                 SearchMode::Company => {
-                    let category = app.category_code().to_string();
                     tokio::spawn(async move {
                         let res = client.search(&keyword, &state, &category, page).await;
-                        let _ = tx.send(AppEvent::SearchResult(res));
+                        let _ = tx.send(AppEvent::SearchResult(generation, res));
                     });
                 }
                 SearchMode::Product => {
                     tokio::spawn(async move {
                         let res = client.search_products(&keyword, &state, page).await;
-                        let _ = tx.send(AppEvent::SearchResult(res));
+                        let _ = tx.send(AppEvent::SearchResult(generation, res));
+                    });
+                }
+                SearchMode::Combined => {
+                    tokio::spawn(async move {
+                        let res = client.search_combined(&keyword, &state, &category, page).await;
+                        let _ = tx.send(AppEvent::SearchResult(generation, res));
                     });
                 }
             }

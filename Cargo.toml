@@ -9,7 +9,7 @@ license = "MIT"
 ratatui = "0.30"
 crossterm = "0.29"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
-reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "gzip"] }
 scraper = "0.27"
 regex = "1"
 anyhow = "1"

@@ -4,6 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 
 use crate::jakim::{CompanyDetail, SearchPage, SearchResult, CATEGORIES, STATES};
+use crate::text_field::TextField;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -18,12 +19,15 @@ pub enum Focus {
     Preview,
 }
 
-/// Which of the portal's two independent search backends to query.
-/// `Company` matches company/premise names (the default directory search);
-/// `Product` matches food/drink *product* names across every company — a
-/// separate query the portal only exposes when category is pinned to "PR".
+/// Which of the portal's search backends to query. `Combined` (the
+/// default) runs both concurrently and merges them, badge-tagged, so a
+/// single search covers "is this a certified company?" and "is this a
+/// certified product?" at once. `Company`/`Product` are still available
+/// for when you specifically want one or the other (e.g. to browse a
+/// non-food category, which product search can't do).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchMode {
+    Combined,
     Company,
     Product,
 }
@@ -31,15 +35,25 @@ pub enum SearchMode {
 impl SearchMode {
     pub fn label(self) -> &'static str {
         match self {
+            SearchMode::Combined => "Combined",
             SearchMode::Company => "Company",
             SearchMode::Product => "Product",
         }
     }
 
-    fn toggled(self) -> Self {
+    fn next(self) -> Self {
         match self {
+            SearchMode::Combined => SearchMode::Company,
             SearchMode::Company => SearchMode::Product,
+            SearchMode::Product => SearchMode::Combined,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            SearchMode::Combined => SearchMode::Product,
             SearchMode::Product => SearchMode::Company,
+            SearchMode::Company => SearchMode::Combined,
         }
     }
 }
@@ -54,7 +68,10 @@ pub enum Action {
 }
 
 pub enum AppEvent {
-    SearchResult(anyhow::Result<SearchPage>),
+    /// Tagged with the generation it was requested under (see
+    /// `App::search_generation`), so a slow response for a search the user
+    /// has since refined can be dropped instead of clobbering newer results.
+    SearchResult(u64, anyhow::Result<SearchPage>),
     /// Tagged with the comp_code it was requested for, so a slow response
     /// for a company the user has since scrolled past can be dropped
     /// instead of clobbering whatever is now selected.
@@ -62,7 +79,7 @@ pub enum AppEvent {
 }
 
 pub struct App {
-    pub input: String,
+    pub input: TextField,
     pub search_mode: SearchMode,
     pub state_idx: usize,
     pub category_idx: usize,
@@ -75,6 +92,10 @@ pub struct App {
     pub total_records: u32,
     pub loading: bool,
     pub error: Option<String>,
+    /// Bumped every time a search is kicked off; main.rs tags the request
+    /// with the value at spawn time so a response that arrives after a
+    /// newer search has already started can be told apart and discarded.
+    search_generation: u64,
 
     /// Live preview of the highlighted company (ranger-style: updates as
     /// the selection moves, no explicit "open" needed).
@@ -89,7 +110,7 @@ pub struct App {
 
     /// Incremental filter over the *currently previewed* company's
     /// product list (client-side only — the portal has no product search).
-    pub product_filter: String,
+    pub product_filter: TextField,
     pub product_filter_active: bool,
 
     pub should_quit: bool,
@@ -99,8 +120,8 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         Self {
-            input: String::new(),
-            search_mode: SearchMode::Company,
+            input: TextField::new(),
+            search_mode: SearchMode::Combined,
             state_idx: 0,
             category_idx: 0,
             focus: Focus::Search,
@@ -111,13 +132,14 @@ impl App {
             total_records: 0,
             loading: false,
             error: None,
+            search_generation: 0,
             preview: None,
             preview_loading: false,
             preview_comp_code: None,
             preview_scroll: 0,
             preview_cache: HashMap::new(),
             pending_preview: None,
-            product_filter: String::new(),
+            product_filter: TextField::new(),
             product_filter_active: false,
             should_quit: false,
             searched_once: false,
@@ -132,31 +154,39 @@ impl App {
         CATEGORIES[self.category_idx].0
     }
 
+    pub fn search_generation(&self) -> u64 {
+        self.search_generation
+    }
+
     pub fn selected_result(&self) -> Option<&SearchResult> {
         self.list_state.selected().and_then(|i| self.results.get(i))
     }
 
     pub fn apply_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::SearchResult(Ok(page)) => {
-                self.loading = false;
-                self.error = None;
-                self.page = page.page.max(1);
-                self.total_pages = page.total_pages;
-                self.total_records = page.total_records;
-                self.results = page.results;
-                self.searched_once = true;
-                if self.results.is_empty() {
-                    self.list_state.select(None);
-                    self.clear_preview();
-                } else {
-                    self.list_state.select(Some(0));
-                    self.sync_preview_for_selection();
+            AppEvent::SearchResult(generation, result) => {
+                if generation != self.search_generation {
+                    return; // stale: a newer search has already started
                 }
-            }
-            AppEvent::SearchResult(Err(e)) => {
                 self.loading = false;
-                self.error = Some(format!("{e:#}"));
+                match result {
+                    Ok(page) => {
+                        self.error = None;
+                        self.page = page.page.max(1);
+                        self.total_pages = page.total_pages;
+                        self.total_records = page.total_records;
+                        self.results = page.results;
+                        self.searched_once = true;
+                        if self.results.is_empty() {
+                            self.list_state.select(None);
+                            self.clear_preview();
+                        } else {
+                            self.list_state.select(Some(0));
+                            self.sync_preview_for_selection();
+                        }
+                    }
+                    Err(e) => self.error = Some(format!("{e:#}")),
+                }
             }
             AppEvent::DetailResult(comp_code, Ok(detail)) => {
                 self.preview_cache.insert(comp_code.clone(), detail.clone());
@@ -214,6 +244,16 @@ impl App {
         }
     }
 
+    /// Marks a new search as starting: bumps the generation (so any
+    /// in-flight response becomes stale) and returns the action for
+    /// main.rs to actually spawn it.
+    fn trigger_search(&mut self) -> Action {
+        self.search_generation += 1;
+        self.loading = true;
+        self.error = None;
+        Action::RunSearch
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Action::Quit;
@@ -236,19 +276,25 @@ impl App {
 
     fn handle_key_search(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Esc => self.focus = Focus::Results,
-            KeyCode::Tab => self.focus = Focus::ModeFilter,
-            KeyCode::BackTab => self.focus = Focus::Results,
+            KeyCode::Esc => {
+                self.focus = Focus::Results;
+                return Action::None;
+            }
+            KeyCode::Tab => {
+                self.focus = Focus::ModeFilter;
+                return Action::None;
+            }
+            KeyCode::BackTab => {
+                self.focus = Focus::Results;
+                return Action::None;
+            }
             KeyCode::Enter => {
                 self.page = 1;
-                return Action::RunSearch;
+                return self.trigger_search();
             }
-            KeyCode::Backspace => {
-                self.input.pop();
-            }
-            KeyCode::Char(c) => self.input.push(c),
             _ => {}
         }
+        self.input.handle_key(key);
         Action::None
     }
 
@@ -257,12 +303,11 @@ impl App {
             KeyCode::Esc => self.focus = Focus::Results,
             KeyCode::Tab => self.focus = Focus::StateFilter,
             KeyCode::BackTab => self.focus = Focus::Search,
-            KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') => {
-                self.search_mode = self.search_mode.toggled();
-            }
+            KeyCode::Left | KeyCode::Char('h') => self.search_mode = self.search_mode.prev(),
+            KeyCode::Right | KeyCode::Char('l') => self.search_mode = self.search_mode.next(),
             KeyCode::Enter => {
                 self.page = 1;
-                return Action::RunSearch;
+                return self.trigger_search();
             }
             _ => {}
         }
@@ -282,7 +327,7 @@ impl App {
             }
             KeyCode::Enter => {
                 self.page = 1;
-                return Action::RunSearch;
+                return self.trigger_search();
             }
             _ => {}
         }
@@ -290,19 +335,20 @@ impl App {
     }
 
     fn handle_key_category_filter(&mut self, key: KeyEvent) -> Action {
+        let category_locked = self.search_mode == SearchMode::Product;
         match key.code {
             KeyCode::Esc => self.focus = Focus::Results,
             KeyCode::Tab => self.focus = Focus::Results,
             KeyCode::BackTab => self.focus = Focus::StateFilter,
-            KeyCode::Left | KeyCode::Char('h') if self.search_mode == SearchMode::Company => {
+            KeyCode::Left | KeyCode::Char('h') if !category_locked => {
                 self.category_idx = self.category_idx.checked_sub(1).unwrap_or(CATEGORIES.len() - 1);
             }
-            KeyCode::Right | KeyCode::Char('l') if self.search_mode == SearchMode::Company => {
+            KeyCode::Right | KeyCode::Char('l') if !category_locked => {
                 self.category_idx = (self.category_idx + 1) % CATEGORIES.len();
             }
             KeyCode::Enter => {
                 self.page = 1;
-                return Action::RunSearch;
+                return self.trigger_search();
             }
             _ => {}
         }
@@ -324,13 +370,13 @@ impl App {
             KeyCode::PageDown | KeyCode::Char('n') => {
                 if self.page < self.total_pages.max(1) {
                     self.page += 1;
-                    return Action::RunSearch;
+                    return self.trigger_search();
                 }
             }
             KeyCode::PageUp | KeyCode::Char('p') => {
                 if self.page > 1 {
                     self.page -= 1;
-                    return Action::RunSearch;
+                    return self.trigger_search();
                 }
             }
             _ => {}
@@ -349,15 +395,11 @@ impl App {
                 KeyCode::Enter => {
                     self.product_filter_active = false;
                 }
-                KeyCode::Backspace => {
-                    self.product_filter.pop();
-                    self.preview_scroll = 0;
+                _ => {
+                    if self.product_filter.handle_key(key) {
+                        self.preview_scroll = 0;
+                    }
                 }
-                KeyCode::Char(c) => {
-                    self.product_filter.push(c);
-                    self.preview_scroll = 0;
-                }
-                _ => {}
             }
             return Action::None;
         }

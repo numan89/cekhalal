@@ -5,7 +5,8 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, Focus, SearchMode};
-use crate::jakim::{CATEGORIES, STATES};
+use crate::jakim::{ResultKind, CATEGORIES, STATES};
+use crate::text_field::TextField;
 
 const ACCENT: Color = Color::Green;
 
@@ -51,6 +52,21 @@ fn focus_style(active: bool) -> Style {
     }
 }
 
+/// Renders a `TextField` with a visible cursor when focused, plain text
+/// otherwise — used for both the search box and the product filter.
+fn text_field_line(field: &TextField, active: bool) -> Line<'static> {
+    if !active {
+        return Line::raw(field.as_string());
+    }
+    let (before, at_cursor, after) = field.render_parts();
+    let cursor_span = if at_cursor.is_empty() {
+        Span::raw("\u{2588}")
+    } else {
+        Span::styled(at_cursor, Style::default().add_modifier(Modifier::REVERSED))
+    };
+    Line::from(vec![Span::raw(before), cursor_span, Span::raw(after)])
+}
+
 fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -63,15 +79,15 @@ fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     let search_active = app.focus == Focus::Search;
-    let search_title = match app.search_mode {
-        SearchMode::Company if search_active => "Search company (Enter to run, Esc to leave)",
-        SearchMode::Company => "Search company (press / )",
-        SearchMode::Product if search_active => "Search product (Enter to run, Esc to leave)",
-        SearchMode::Product => "Search product (press / )",
+    let search_title = match (app.search_mode, search_active) {
+        (SearchMode::Combined, true) => "Search (Enter to run, Esc to leave) \u{2014} companies + products",
+        (SearchMode::Combined, false) => "Search (press / ) \u{2014} companies + products",
+        (SearchMode::Company, true) => "Search company (Enter to run, Esc to leave)",
+        (SearchMode::Company, false) => "Search company (press / )",
+        (SearchMode::Product, true) => "Search product (Enter to run, Esc to leave)",
+        (SearchMode::Product, false) => "Search product (press / )",
     };
-    let cursor = if search_active { "█" } else { "" };
-    let search_text = format!("{}{}", app.input, cursor);
-    let search = Paragraph::new(search_text).block(
+    let search = Paragraph::new(text_field_line(&app.input, search_active)).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(focus_style(search_active))
@@ -80,12 +96,14 @@ fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(search, cols[0]);
 
     let mode_active = app.focus == Focus::ModeFilter;
-    let mode_widget = Paragraph::new(app.search_mode.label()).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(focus_style(mode_active))
-            .title("Mode (\u{2190}/\u{2192})"),
-    );
+    let mode_widget = Paragraph::new(app.search_mode.label())
+        .style(if app.search_mode == SearchMode::Combined { Style::default().fg(ACCENT) } else { Style::default() })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(focus_style(mode_active))
+                .title("Mode (\u{2190}/\u{2192}, optional)"),
+        );
     f.render_widget(mode_widget, cols[1]);
 
     let state_active = app.focus == Focus::StateFilter;
@@ -93,30 +111,38 @@ fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(focus_style(state_active))
-            .title("State (\u{2190}/\u{2192})"),
+            .title("State (\u{2190}/\u{2192}, optional)"),
     );
     f.render_widget(state_widget, cols[2]);
 
     let cat_active = app.focus == Focus::CategoryFilter;
-    let (cat_text, cat_title) = match app.search_mode {
-        SearchMode::Company => (CATEGORIES[app.category_idx].1, "Category (\u{2190}/\u{2192})"),
-        SearchMode::Product => ("Produk Makanan / Minuman", "Category (fixed for product search)"),
-    };
-    let cat_widget = Paragraph::new(cat_text).style(if app.search_mode == SearchMode::Product {
-        Style::default().fg(Color::DarkGray)
+    let category_locked = app.search_mode == SearchMode::Product;
+    let (cat_text, cat_title) = if category_locked {
+        ("Produk Makanan / Minuman", "Category (fixed for product search)")
     } else {
-        Style::default()
-    }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(focus_style(cat_active))
-            .title(cat_title),
-    );
+        (CATEGORIES[app.category_idx].1, "Category (\u{2190}/\u{2192}, optional)")
+    };
+    let cat_widget = Paragraph::new(cat_text)
+        .style(if category_locked { Style::default().fg(Color::DarkGray) } else { Style::default() })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(focus_style(cat_active))
+                .title(cat_title),
+        );
     f.render_widget(cat_widget, cols[3]);
+}
+
+fn result_badge(kind: ResultKind) -> Span<'static> {
+    match kind {
+        ResultKind::Company => Span::styled(" CO ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)),
+        ResultKind::Product => Span::styled(" PR ", Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)),
+    }
 }
 
 fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     let results_active = app.focus == Focus::Results;
+    let show_badges = app.search_mode == SearchMode::Combined;
 
     let body: Vec<ListItem> = if app.loading {
         vec![ListItem::new("Searching MyeHalal directory...")]
@@ -127,10 +153,10 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
         )))]
     } else if !app.searched_once {
         vec![ListItem::new(
-            "Type a name and press Enter to search.\n\
-             Mode: Company (search by company name) or Product\n\
-             (search by product/brand name, e.g. \"Milo\") \u{2014} toggle it\n\
-             with the Mode field (Tab from Search).\n\
+            "Type a name and press Enter to search \u{2014} matches both\n\
+             companies and products at once (tagged CO / PR below).\n\
+             Mode/State/Category (Tab from Search) narrow things down\n\
+             further, but are entirely optional.\n\
              The preview pane on the right shows details live as you move.",
         )]
     } else if app.results.is_empty() {
@@ -140,12 +166,18 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
             .iter()
             .map(|r| {
                 let soonest = r.expiry_dates.first().map(String::as_str).unwrap_or("-");
-                let mut lines = vec![Line::from(Span::styled(
-                    r.name.clone(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ))];
+                let name_line = if show_badges {
+                    Line::from(vec![
+                        result_badge(r.kind),
+                        Span::raw(" "),
+                        Span::styled(r.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
+                    ])
+                } else {
+                    Line::from(Span::styled(r.name.clone(), Style::default().add_modifier(Modifier::BOLD)))
+                };
+                let mut lines = vec![name_line];
                 if !r.address.is_empty() {
-                    let prefix = if app.search_mode == SearchMode::Product { "Company: " } else { "" };
+                    let prefix = if r.kind == ResultKind::Product { "Company: " } else { "" };
                     lines.push(Line::from(Span::styled(
                         format!("  {prefix}{}", r.address),
                         Style::default().fg(Color::DarkGray),
@@ -157,7 +189,7 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(Color::Yellow),
                     )));
                 }
-                let expiry_line = if app.search_mode == SearchMode::Product {
+                let expiry_line = if r.kind == ResultKind::Product {
                     format!("  expires {soonest}")
                 } else {
                     format!(
@@ -198,12 +230,15 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     let preview_active = app.focus == Focus::Preview;
+    let filter_text = app.product_filter.as_string();
     let title = if app.product_filter_active {
-        format!("Filter products: {}\u{2588}", app.product_filter)
-    } else if !app.product_filter.is_empty() {
-        format!("Preview \u{2014} filtered by \"{}\" (Esc to clear)", app.product_filter)
+        let mut spans = vec![Span::raw("Filter products: ")];
+        spans.extend(text_field_line(&app.product_filter, true).spans);
+        Line::from(spans)
+    } else if !filter_text.is_empty() {
+        Line::raw(format!("Preview \u{2014} filtered by \"{filter_text}\" (Esc to clear)"))
     } else {
-        "Preview  (l/Enter to focus, / filters products, h/Esc back)".to_string()
+        Line::raw("Preview  (l/Enter to focus, / filters products, h/Esc back)")
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -241,7 +276,7 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
         lines.push(field("Reference", &detail.reference_no.join(", ")));
     }
 
-    let filter = app.product_filter.to_lowercase();
+    let filter = filter_text.to_lowercase();
     let matches: Vec<_> = detail
         .products
         .iter()
@@ -256,7 +291,7 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     let heading = if filter.is_empty() {
         format!("Products ({})", detail.products.len())
     } else {
-        format!("Products ({}/{} match \"{}\")", matches.len(), detail.products.len(), app.product_filter)
+        format!("Products ({}/{} match \"{filter_text}\")", matches.len(), detail.products.len())
     };
     lines.push(Line::from(Span::styled(
         heading,
@@ -294,8 +329,8 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let help = match app.focus {
-        Focus::Search => "type to search  Enter search  Esc leave field  Tab next  Ctrl+C quit",
-        Focus::ModeFilter => "\u{2190}/\u{2192} toggle Company/Product search  Enter search  Tab next  Ctrl+C quit",
+        Focus::Search => "type to search (Alt+\u{2190}word Ctrl+W del-word Home/End)  Enter search  Esc leave field  Tab next  Ctrl+C quit",
+        Focus::ModeFilter => "\u{2190}/\u{2192} cycle Combined/Company/Product  Enter search  Tab next  Ctrl+C quit",
         Focus::StateFilter | Focus::CategoryFilter => "\u{2190}/\u{2192} change  Enter search  Tab next  Esc results  Ctrl+C quit",
         Focus::Results => "\u{2191}/\u{2193} move  l/Enter preview  n/p page  / search  q quit",
         Focus::Preview if app.product_filter_active => "type to filter products  Enter apply  Esc cancel",

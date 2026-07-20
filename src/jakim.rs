@@ -56,11 +56,18 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     ("PS", "Rumah Sembelihan"),
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultKind {
+    Company,
+    Product,
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     pub comp_code: String,
     pub type_: String,
     pub ty: String,
+    pub kind: ResultKind,
     pub name: String,
     pub address: String,
     pub brand: String,
@@ -167,6 +174,37 @@ impl JakimClient {
             .context("MyeHalal product search returned an error status")?;
         let body = resp.text().await.context("failed to read response body")?;
         parse_product_search_page(&body, page)
+    }
+
+    /// Runs the company search and the product search concurrently and
+    /// merges them into one page, tagged by `SearchResult::kind` so the UI
+    /// can badge each row. `category` only ever filters the company side —
+    /// product search is inherently food/drink-only, so it always runs
+    /// regardless of which category is selected.
+    pub async fn search_combined(
+        &self,
+        keyword: &str,
+        state: &str,
+        category: &str,
+        page: u32,
+    ) -> Result<SearchPage> {
+        let (company_res, product_res) = tokio::join!(
+            self.search(keyword, state, category, page),
+            self.search_products(keyword, state, page),
+        );
+        let mut company = company_res.context("company search failed")?;
+        let product = product_res.context("product search failed")?;
+
+        let total_records = company.total_records + product.total_records;
+        let total_pages = company.total_pages.max(product.total_pages);
+        company.results.extend(product.results);
+
+        Ok(SearchPage {
+            results: company.results,
+            page,
+            total_pages,
+            total_records,
+        })
     }
 
     pub async fn detail(&self, comp_code: &str, type_: &str, ty: &str) -> Result<CompanyDetail> {
@@ -310,6 +348,7 @@ fn parse_search_page(html: &str, requested_page: u32) -> Result<SearchPage> {
             comp_code,
             type_,
             ty,
+            kind: ResultKind::Company,
             name,
             address,
             brand,
@@ -392,6 +431,7 @@ fn parse_product_search_page(html: &str, requested_page: u32) -> Result<SearchPa
             comp_code,
             type_,
             ty: String::new(),
+            kind: ResultKind::Product,
             name: product_name,
             address: company_name,
             brand,
@@ -490,6 +530,7 @@ mod tests {
         assert_eq!(first.comp_code, "COMP-20110825-101221");
         assert_eq!(first.type_, "C");
         assert_eq!(first.ty, "CO");
+        assert_eq!(first.kind, ResultKind::Company);
         assert!(first.name.contains("CEREAL PARTNERS"));
         assert!(first.name.contains("NESTLE"));
         assert!(first.address.contains("PETALING JAYA"));
@@ -510,6 +551,7 @@ mod tests {
         let first = &page.results[0];
         assert_eq!(first.type_, "C");
         assert!(first.ty.is_empty());
+        assert_eq!(first.kind, ResultKind::Product);
         assert!(first.name.contains("NESTLE"));
         assert!(first.name.contains("MILO"));
         assert_eq!(first.brand, "NESTLE/MILO");
