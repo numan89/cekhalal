@@ -4,20 +4,6 @@
 # pushes to GitHub, creates a GitHub release, updates + rebuilds the AUR
 # PKGBUILD against that release (a real `makepkg -f`, not just a checksum
 # edit), and pushes the result to AUR.
-#
-# Usage:
-#   scripts/release.sh 0.1.2        Full release: bump Cargo.toml to 0.1.2,
-#                                    tag v0.1.2, GitHub release, AUR pkgver
-#                                    bump (pkgrel reset to 1).
-#   scripts/release.sh --pkgrel-only
-#                                    Packaging-only fix, no code change: no
-#                                    Cargo.toml/tag/GitHub release, just
-#                                    bumps AUR pkgrel and republishes.
-#
-# Safety: refuses to run with a dirty working tree, requires the active
-# `gh` account to match REPO_OWNER, requires SSH to AUR to work, and
-# requires `cargo test` (twice: once locally, once inside the isolated
-# makepkg build) to pass before anything gets pushed anywhere.
 
 set -euo pipefail
 
@@ -36,15 +22,34 @@ log()  { printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/release.sh
+      No version given: auto-bumps the patch version (X.Y.Z -> X.Y.(Z+1))
+      from whatever's currently in Cargo.toml, and releases that.
+
+  scripts/release.sh <X.Y.Z>
+      Releases under an explicit version instead (e.g. for a minor/major
+      bump).
+
+  scripts/release.sh --pkgrel-only
+      Packaging-only fix, no code change: no Cargo.toml/tag/GitHub
+      release, just bumps the AUR pkgrel and republishes.
+
+Safety: refuses to run with a dirty working tree, requires the active gh
+account to match the configured owner, requires SSH to AUR to work, and
+requires 'cargo test' (twice: once locally, once inside the isolated
+makepkg build) to pass before anything gets pushed anywhere.
+EOF
+}
+
 PKGREL_ONLY=0
 NEW_VERSION=""
 case "${1:-}" in
   --pkgrel-only) PKGREL_ONLY=1 ;;
-  -h|--help)
-    sed -n '2,20p' "$0"
-    exit 0
-    ;;
-  "") die "Usage: $0 <new-version> | --pkgrel-only  (see $0 --help)" ;;
+  -h|--help) usage; exit 0 ;;
+  "") ;; # no version given -- auto-bump patch, resolved after preflight checks
   *) NEW_VERSION="$1" ;;
 esac
 
@@ -77,8 +82,17 @@ if ! ssh -i "$AUR_SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTime
 fi
 
 if [[ $PKGREL_ONLY -eq 0 ]]; then
-  [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Version must look like X.Y.Z, got '$NEW_VERSION'."
   CURRENT_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+  [[ -n "$CURRENT_VERSION" ]] || die "Could not read the current version from Cargo.toml."
+
+  if [[ -z "$NEW_VERSION" ]]; then
+    [[ "$CURRENT_VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] \
+      || die "Cargo.toml version '$CURRENT_VERSION' isn't X.Y.Z -- pass an explicit version."
+    NEW_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$(( BASH_REMATCH[3] + 1 ))"
+    log "No version given -- auto-bumping patch: $CURRENT_VERSION -> $NEW_VERSION"
+  fi
+
+  [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Version must look like X.Y.Z, got '$NEW_VERSION'."
   [[ "$NEW_VERSION" != "$CURRENT_VERSION" ]] || die "Cargo.toml is already at $NEW_VERSION. Use --pkgrel-only for a packaging-only fix."
   git tag --list "v$NEW_VERSION" | grep -q . && die "Tag v$NEW_VERSION already exists."
 fi

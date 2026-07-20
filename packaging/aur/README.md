@@ -16,7 +16,9 @@ Run [`scripts/release.sh`](../../scripts/release.sh) from the repo root —
 it does everything below in one go, refusing to proceed if any step fails:
 
 ```sh
-scripts/release.sh 0.1.2        # new version: code + packaging release
+scripts/release.sh                # no version given: auto-bumps the patch
+                                   # version (X.Y.Z -> X.Y.(Z+1)) and releases it
+scripts/release.sh 0.2.0          # explicit version, e.g. for a minor/major bump
 scripts/release.sh --pkgrel-only  # packaging-only fix, no code change
 ```
 
