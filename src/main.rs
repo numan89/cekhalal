@@ -14,7 +14,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use app::{Action, App, AppEvent, Mode};
+use app::{Action, App, AppEvent};
 use jakim::JakimClient;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -74,6 +74,15 @@ async fn run(
             app.apply_event(evt);
         }
 
+        if let Some((comp_code, type_, ty)) = app.pending_preview.take() {
+            let client = client.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let res = client.detail(&comp_code, &type_, &ty).await;
+                let _ = tx.send(AppEvent::DetailResult(comp_code, res));
+            });
+        }
+
         if app.should_quit {
             return Ok(());
         }
@@ -97,22 +106,6 @@ fn dispatch(action: Action, app: &mut App, client: &Arc<JakimClient>, tx: &mpsc:
                 let res = client.search(&keyword, &state, &category, page).await;
                 let _ = tx.send(AppEvent::SearchResult(res));
             });
-        }
-        Action::OpenDetail => {
-            if let Some(r) = app.selected_result() {
-                let comp_code = r.comp_code.clone();
-                let type_ = r.type_.clone();
-                let ty = r.ty.clone();
-                app.mode = Mode::Detail;
-                app.detail = None;
-                app.detail_loading = true;
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    let res = client.detail(&comp_code, &type_, &ty).await;
-                    let _ = tx.send(AppEvent::DetailResult(res));
-                });
-            }
         }
     }
 }

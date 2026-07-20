@@ -1,10 +1,10 @@
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, Focus, Mode};
+use crate::app::{App, Focus};
 use crate::jakim::{CATEGORIES, STATES};
 
 const ACCENT: Color = Color::Green;
@@ -22,12 +22,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     draw_title(f, root[0]);
     draw_search_row(f, app, root[1]);
-    draw_results(f, app, root[2]);
-    draw_status_bar(f, app, root[3]);
 
-    if app.mode == Mode::Detail {
-        draw_detail_popup(f, app);
-    }
+    // Ranger-style: results on the left, a live preview of whatever is
+    // highlighted on the right — no separate "open" step.
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(root[2]);
+    draw_results(f, app, panes[0]);
+    draw_preview(f, app, panes[1]);
+
+    draw_status_bar(f, app, root[3]);
 }
 
 fn draw_title(f: &mut Frame, area: Rect) {
@@ -99,8 +104,9 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
         )))]
     } else if !app.searched_once {
         vec![ListItem::new(
-            "Type a company, product, or brand name and press Enter to search.\n\
-             Tab cycles Search / State / Category / Results. Press ? for full help.",
+            "Type a company name and press Enter to search.\n\
+             Tab cycles Search / State / Category / Results.\n\
+             The preview pane on the right shows products live as you move.",
         )]
     } else if app.results.is_empty() {
         vec![ListItem::new("No results for this search.")]
@@ -126,7 +132,11 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
                     )));
                 }
                 lines.push(Line::from(Span::styled(
-                    format!("  Nearest expiry: {soonest}  ({} cert entr{})", r.expiry_dates.len(), if r.expiry_dates.len() == 1 { "y" } else { "ies" }),
+                    format!(
+                        "  expiry {soonest}  ({} cert entr{})",
+                        r.expiry_dates.len(),
+                        if r.expiry_dates.len() == 1 { "y" } else { "ies" }
+                    ),
                     Style::default().fg(Color::Cyan),
                 )));
                 ListItem::new(lines)
@@ -158,40 +168,37 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut app.list_state);
 }
 
-fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
-    let help = match app.focus {
-        Focus::Search => "type to search  Enter search  Esc leave field  Tab next  Ctrl+C quit",
-        Focus::StateFilter | Focus::CategoryFilter => "\u{2190}/\u{2192} change  Enter search  Tab next  Esc results  Ctrl+C quit",
-        Focus::Results => "\u{2191}/\u{2193} move  Enter details  n/p page  / search  q quit",
+fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
+    let preview_active = app.focus == Focus::Preview;
+    let title = if app.product_filter_active {
+        format!("Filter products: {}\u{2588}", app.product_filter)
+    } else if !app.product_filter.is_empty() {
+        format!("Preview \u{2014} filtered by \"{}\" (Esc to clear)", app.product_filter)
+    } else {
+        "Preview  (l/Enter to focus, / filters products, h/Esc back)".to_string()
     };
-    f.render_widget(
-        Paragraph::new(help).style(Style::default().fg(Color::DarkGray)),
-        area,
-    );
-}
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(focus_style(preview_active))
+        .title(title);
 
-fn draw_detail_popup(f: &mut Frame, app: &App) {
-    let area = centered_rect(80, 80, f.area());
-    f.render_widget(Clear, area);
-
-    if app.detail_loading {
-        let p = Paragraph::new("Loading company details...")
-            .block(Block::default().borders(Borders::ALL).title("Details"));
-        f.render_widget(p, area);
+    if app.selected_result().is_none() {
+        f.render_widget(Paragraph::new("Nothing selected yet.").block(block), area);
         return;
     }
-
-    let Some(detail) = &app.detail else {
-        let p = Paragraph::new("No details available.")
-            .block(Block::default().borders(Borders::ALL).title("Details"));
-        f.render_widget(p, area);
+    if app.preview_loading {
+        f.render_widget(Paragraph::new("Loading...").block(block), area);
+        return;
+    }
+    let Some(detail) = &app.preview else {
+        f.render_widget(Paragraph::new("No details available.").block(block), area);
         return;
     };
 
     let mut lines: Vec<Line> = Vec::new();
     let field = |label: &str, value: &str| -> Line<'static> {
         Line::from(vec![
-            Span::styled(format!("{label:<12}"), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{label:<10}"), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
             Span::raw(value.to_string()),
         ])
     };
@@ -200,25 +207,40 @@ fn draw_detail_popup(f: &mut Frame, app: &App) {
     lines.push(field("Address", &detail.address));
     lines.push(field("State", &detail.state));
     lines.push(field("Phone", &detail.phone));
-    lines.push(field("Fax", &detail.fax));
     lines.push(field("Email", &detail.email));
     lines.push(field("Website", &detail.website));
     if !detail.reference_no.is_empty() {
         lines.push(field("Reference", &detail.reference_no.join(", ")));
     }
-    if !detail.officers.is_empty() {
-        lines.push(field("Officers", &detail.officers.join(", ")));
-    }
+
+    let filter = app.product_filter.to_lowercase();
+    let matches: Vec<_> = detail
+        .products
+        .iter()
+        .filter(|p| {
+            filter.is_empty()
+                || p.name.to_lowercase().contains(&filter)
+                || p.brand.to_lowercase().contains(&filter)
+        })
+        .collect();
 
     lines.push(Line::raw(""));
+    let heading = if filter.is_empty() {
+        format!("Products ({})", detail.products.len())
+    } else {
+        format!("Products ({}/{} match \"{}\")", matches.len(), detail.products.len(), app.product_filter)
+    };
     lines.push(Line::from(Span::styled(
-        format!("Product / Menu List ({})", detail.products.len()),
+        heading,
         Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
     )));
+
     if detail.products.is_empty() {
         lines.push(Line::raw("  (none listed)"));
+    } else if matches.is_empty() {
+        lines.push(Line::raw("  (no products match this filter)"));
     } else {
-        for (i, p) in detail.products.iter().enumerate() {
+        for (i, p) in matches.iter().enumerate() {
             let brand = if p.brand.is_empty() { String::new() } else { format!(" [{}]", p.brand) };
             lines.push(Line::from(vec![
                 Span::styled(format!("  {:>3}. ", i + 1), Style::default().fg(Color::DarkGray)),
@@ -237,33 +259,21 @@ fn draw_detail_popup(f: &mut Frame, app: &App) {
     let text = Text::from(lines);
     let p = Paragraph::new(text)
         .wrap(Wrap { trim: false })
-        .scroll((app.detail_scroll, 0))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(ACCENT))
-                .title("Certificate details (\u{2191}/\u{2193} scroll, Esc/q close)")
-                .title_alignment(Alignment::Left),
-        );
+        .scroll((app.preview_scroll, 0))
+        .block(block);
     f.render_widget(p, area);
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(vertical[1])[1]
+fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
+    let help = match app.focus {
+        Focus::Search => "type to search  Enter search  Esc leave field  Tab next  Ctrl+C quit",
+        Focus::StateFilter | Focus::CategoryFilter => "\u{2190}/\u{2192} change  Enter search  Tab next  Esc results  Ctrl+C quit",
+        Focus::Results => "\u{2191}/\u{2193} move  l/Enter preview  n/p page  / search  q quit",
+        Focus::Preview if app.product_filter_active => "type to filter products  Enter apply  Esc cancel",
+        Focus::Preview => "\u{2191}/\u{2193} scroll  / filter products  h/Esc back  q quit",
+    };
+    f.render_widget(
+        Paragraph::new(help).style(Style::default().fg(Color::DarkGray)),
+        area,
+    );
 }

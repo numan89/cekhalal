@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 
@@ -9,12 +11,10 @@ pub enum Focus {
     StateFilter,
     CategoryFilter,
     Results,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Browse,
-    Detail,
+    /// Ranger's right column: reading/scrolling the live preview of the
+    /// highlighted company, or typing an incremental filter over its
+    /// product list.
+    Preview,
 }
 
 /// What the caller (main.rs) should do after a key press. Keeps App free of
@@ -24,12 +24,14 @@ pub enum Action {
     None,
     Quit,
     RunSearch,
-    OpenDetail,
 }
 
 pub enum AppEvent {
     SearchResult(anyhow::Result<SearchPage>),
-    DetailResult(anyhow::Result<CompanyDetail>),
+    /// Tagged with the comp_code it was requested for, so a slow response
+    /// for a company the user has since scrolled past can be dropped
+    /// instead of clobbering whatever is now selected.
+    DetailResult(String, anyhow::Result<CompanyDetail>),
 }
 
 pub struct App {
@@ -37,7 +39,6 @@ pub struct App {
     pub state_idx: usize,
     pub category_idx: usize,
     pub focus: Focus,
-    pub mode: Mode,
 
     pub results: Vec<SearchResult>,
     pub list_state: ListState,
@@ -47,9 +48,21 @@ pub struct App {
     pub loading: bool,
     pub error: Option<String>,
 
-    pub detail: Option<CompanyDetail>,
-    pub detail_loading: bool,
-    pub detail_scroll: u16,
+    /// Live preview of the highlighted company (ranger-style: updates as
+    /// the selection moves, no explicit "open" needed).
+    pub preview: Option<CompanyDetail>,
+    pub preview_loading: bool,
+    pub preview_comp_code: Option<String>,
+    pub preview_scroll: u16,
+    pub preview_cache: HashMap<String, CompanyDetail>,
+    /// Set when the selection needs a preview main.rs hasn't fetched yet;
+    /// main.rs drains this once per tick and clears it.
+    pub pending_preview: Option<(String, String, String)>,
+
+    /// Incremental filter over the *currently previewed* company's
+    /// product list (client-side only — the portal has no product search).
+    pub product_filter: String,
+    pub product_filter_active: bool,
 
     pub should_quit: bool,
     pub searched_once: bool,
@@ -62,7 +75,6 @@ impl App {
             state_idx: 0,
             category_idx: 0,
             focus: Focus::Search,
-            mode: Mode::Browse,
             results: Vec::new(),
             list_state: ListState::default(),
             page: 1,
@@ -70,9 +82,14 @@ impl App {
             total_records: 0,
             loading: false,
             error: None,
-            detail: None,
-            detail_loading: false,
-            detail_scroll: 0,
+            preview: None,
+            preview_loading: false,
+            preview_comp_code: None,
+            preview_scroll: 0,
+            preview_cache: HashMap::new(),
+            pending_preview: None,
+            product_filter: String::new(),
+            product_filter_active: false,
             should_quit: false,
             searched_once: false,
         }
@@ -102,24 +119,69 @@ impl App {
                 self.searched_once = true;
                 if self.results.is_empty() {
                     self.list_state.select(None);
+                    self.clear_preview();
                 } else {
                     self.list_state.select(Some(0));
+                    self.sync_preview_for_selection();
                 }
             }
             AppEvent::SearchResult(Err(e)) => {
                 self.loading = false;
                 self.error = Some(format!("{e:#}"));
             }
-            AppEvent::DetailResult(Ok(detail)) => {
-                self.detail_loading = false;
-                self.detail_scroll = 0;
-                self.detail = Some(detail);
+            AppEvent::DetailResult(comp_code, Ok(detail)) => {
+                self.preview_cache.insert(comp_code.clone(), detail.clone());
+                if self.preview_comp_code.as_deref() == Some(comp_code.as_str()) {
+                    self.preview = Some(detail);
+                    self.preview_loading = false;
+                }
             }
-            AppEvent::DetailResult(Err(e)) => {
-                self.detail_loading = false;
-                self.mode = Mode::Browse;
-                self.error = Some(format!("{e:#}"));
+            AppEvent::DetailResult(comp_code, Err(e)) => {
+                if self.preview_comp_code.as_deref() == Some(comp_code.as_str()) {
+                    self.preview_loading = false;
+                    self.error = Some(format!("{e:#}"));
+                }
             }
+        }
+    }
+
+    fn clear_preview(&mut self) {
+        self.preview = None;
+        self.preview_loading = false;
+        self.preview_comp_code = None;
+        self.product_filter.clear();
+        self.product_filter_active = false;
+    }
+
+    /// Ensures `preview` reflects whatever is currently highlighted:
+    /// reuse the cache if we've seen this company before, otherwise queue
+    /// a fetch for main.rs to pick up.
+    fn sync_preview_for_selection(&mut self) {
+        let Some(r) = self.selected_result() else {
+            self.clear_preview();
+            return;
+        };
+        let comp_code = r.comp_code.clone();
+        let type_ = r.type_.clone();
+        let ty = r.ty.clone();
+        if self.preview_comp_code.as_deref() == Some(comp_code.as_str())
+            && (self.preview.is_some() || self.preview_loading)
+        {
+            return;
+        }
+
+        self.preview_scroll = 0;
+        self.product_filter.clear();
+        self.product_filter_active = false;
+        self.preview_comp_code = Some(comp_code.clone());
+
+        if let Some(cached) = self.preview_cache.get(&comp_code) {
+            self.preview = Some(cached.clone());
+            self.preview_loading = false;
+        } else {
+            self.preview = None;
+            self.preview_loading = true;
+            self.pending_preview = Some((comp_code, type_, ty));
         }
     }
 
@@ -128,39 +190,17 @@ impl App {
             return Action::Quit;
         }
 
-        match self.mode {
-            Mode::Detail => self.handle_key_detail(key),
-            Mode::Browse => self.handle_key_browse(key),
-        }
-    }
-
-    fn handle_key_detail(&mut self, key: KeyEvent) -> Action {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
-                self.mode = Mode::Browse;
-                self.detail = None;
-                self.detail_loading = false;
-            }
-            KeyCode::Down | KeyCode::Char('j') => self.detail_scroll = self.detail_scroll.saturating_add(1),
-            KeyCode::Up | KeyCode::Char('k') => self.detail_scroll = self.detail_scroll.saturating_sub(1),
-            KeyCode::PageDown => self.detail_scroll = self.detail_scroll.saturating_add(10),
-            KeyCode::PageUp => self.detail_scroll = self.detail_scroll.saturating_sub(10),
-            _ => {}
-        }
-        Action::None
-    }
-
-    fn handle_key_browse(&mut self, key: KeyEvent) -> Action {
-        if key.code == KeyCode::Char('/') && self.focus != Focus::Search {
+        if key.code == KeyCode::Char('/') && self.focus != Focus::Search && self.focus != Focus::Preview {
             self.focus = Focus::Search;
             return Action::None;
         }
 
         match self.focus {
-            Focus::Search => return self.handle_key_search(key),
-            Focus::StateFilter => return self.handle_key_state_filter(key),
-            Focus::CategoryFilter => return self.handle_key_category_filter(key),
-            Focus::Results => return self.handle_key_results(key),
+            Focus::Search => self.handle_key_search(key),
+            Focus::StateFilter => self.handle_key_state_filter(key),
+            Focus::CategoryFilter => self.handle_key_category_filter(key),
+            Focus::Results => self.handle_key_results(key),
+            Focus::Preview => self.handle_key_preview(key),
         }
     }
 
@@ -229,9 +269,9 @@ impl App {
             KeyCode::BackTab => self.focus = Focus::CategoryFilter,
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
-            KeyCode::Enter => {
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => {
                 if self.selected_result().is_some() {
-                    return Action::OpenDetail;
+                    self.focus = Focus::Preview;
                 }
             }
             KeyCode::PageDown | KeyCode::Char('n') => {
@@ -251,6 +291,50 @@ impl App {
         Action::None
     }
 
+    fn handle_key_preview(&mut self, key: KeyEvent) -> Action {
+        if self.product_filter_active {
+            match key.code {
+                KeyCode::Esc => {
+                    self.product_filter_active = false;
+                    self.product_filter.clear();
+                    self.preview_scroll = 0;
+                }
+                KeyCode::Enter => {
+                    self.product_filter_active = false;
+                }
+                KeyCode::Backspace => {
+                    self.product_filter.pop();
+                    self.preview_scroll = 0;
+                }
+                KeyCode::Char(c) => {
+                    self.product_filter.push(c);
+                    self.preview_scroll = 0;
+                }
+                _ => {}
+            }
+            return Action::None;
+        }
+
+        match key.code {
+            KeyCode::Char('q') => return Action::Quit,
+            KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
+                if !self.product_filter.is_empty() {
+                    self.product_filter.clear();
+                    self.preview_scroll = 0;
+                } else {
+                    self.focus = Focus::Results;
+                }
+            }
+            KeyCode::Char('/') => self.product_filter_active = true,
+            KeyCode::Down | KeyCode::Char('j') => self.preview_scroll = self.preview_scroll.saturating_add(1),
+            KeyCode::Up | KeyCode::Char('k') => self.preview_scroll = self.preview_scroll.saturating_sub(1),
+            KeyCode::PageDown => self.preview_scroll = self.preview_scroll.saturating_add(10),
+            KeyCode::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(10),
+            _ => {}
+        }
+        Action::None
+    }
+
     fn move_selection(&mut self, delta: i32) {
         if self.results.is_empty() {
             return;
@@ -259,5 +343,6 @@ impl App {
         let current = self.list_state.selected().unwrap_or(0) as i32;
         let next = (current + delta).rem_euclid(len);
         self.list_state.select(Some(next as usize));
+        self.sync_preview_for_selection();
     }
 }
