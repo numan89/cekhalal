@@ -1,4 +1,6 @@
-//! Client for JAKIM's official MyeHalal directory (myehalal.halal.gov.my).
+//! Client for JAKIM's official MyeHalal directory, now served from the
+//! main Halal Malaysia Portal (www.halal.gov.my) — the old
+//! myehalal.halal.gov.my/portal-halal/v1/... host 301-redirects there.
 //!
 //! The portal is a plain server-rendered PHP site with no public JSON API,
 //! so results are scraped from the same HTML the browser-based search page
@@ -12,8 +14,8 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 
-const SEARCH_URL: &str = "https://myehalal.halal.gov.my/portal-halal/v1/index.php";
-const DETAIL_URL: &str = "https://myehalal.halal.gov.my/portal-halal/v1/directory/slm_viewdetail.php";
+const SEARCH_URL: &str = "https://www.halal.gov.my/index.php";
+const DETAIL_URL: &str = "https://www.halal.gov.my/directory/slm_viewdetail.php";
 
 /// Opaque routing token the portal expects on every directory search
 /// request (base64 of `directory/index_directory;;;;`). It never changes

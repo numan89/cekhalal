@@ -6,8 +6,8 @@ and products without leaving the terminal.
 
 There's no public API, so `cekhalal` talks to the same two search backends
 the portal's own web pages use (server-rendered HTML) and parses the
-results. It only reads from `myehalal.halal.gov.my`; it doesn't submit
-anything.
+results. It only reads from `halal.gov.my` (MyeHalal now lives under the
+main Halal Malaysia Portal); it doesn't submit anything.
 
 ## Install
 
