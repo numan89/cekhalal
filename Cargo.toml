@@ -1,6 +1,6 @@
 [package]
 name = "cekhalal"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "Terminal UI to search Malaysia's official JAKIM halal directory (MyeHalal)"
 license = "MIT"

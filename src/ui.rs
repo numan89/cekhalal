@@ -1,4 +1,4 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
@@ -37,11 +37,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_title(f: &mut Frame, area: Rect) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(12)])
+        .split(area);
+
     let line = Line::from(vec![
         Span::styled(" cekhalal ", Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD)),
         Span::raw("  JAKIM MyeHalal directory, from your terminal"),
     ]);
-    f.render_widget(Paragraph::new(line), area);
+    f.render_widget(Paragraph::new(line), cols[0]);
+
+    let credit = Paragraph::new("by Nu'man")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Right);
+    f.render_widget(credit, cols[1]);
 }
 
 fn focus_style(active: bool) -> Style {

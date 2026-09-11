@@ -136,6 +136,10 @@ A few things worth knowing if you're poking at the code:
   ever sends `category`; the `ty` switch is set by JS when clicking the
   "Produk" results tab.
 
+## Author
+
+Made by [Muhammad Nu'man](https://github.com/numan89).
+
 ## License
 
 [MIT](LICENSE)
