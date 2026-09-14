@@ -55,12 +55,16 @@ main search box — you never have to touch them:
 ### Keys
 
 The main flow is just two stops — **Tab** (either direction, Shift+Tab
-is the same here) switches between **Search** and **Results**. Preview
-is a step *off* that loop, not part of it: it only ever gets focus when
-you press **Enter** on a highlighted result, and from inside Preview,
-**Tab** always takes you straight back to **Search** (not Results) while
+is the same here) switches between **Search** and **Results**. Once a
+search actually completes, focus lands on Results automatically (so
+`↑`/`↓` works immediately, no extra Tab needed). Preview is a step *off*
+that loop, not part of it: it only ever gets focus when you press
+**Enter** on a highlighted result, and from inside Preview, **Tab**
+always takes you straight back to **Search** (not Results) while
 **Enter** always takes you back to **Results** (not Search) — so Tab and
-Enter never leave you guessing which of the two you'll land on.
+Enter never leave you guessing which of the two you'll land on. Preview
+only takes up screen space once you've actually searched — before that,
+Results uses the full width.
 
 Mode/State/Category live off to the side and are one shortcut away from
 *anywhere*, regardless of which of the above you're currently in:
@@ -69,9 +73,11 @@ Mode/State/Category live off to the side and are one shortcut away from
 - **Alt+2** — State
 - **Alt+3** — Category
 
-Once jumped to one of those, **←/→** (or h/l) changes its value, **Enter**
-runs the search and drops you back at Results, and **Esc** (or Tab)
-also returns to Results without searching.
+Once jumped to one of those, **←/→** (or h/l) changes its value — this
+only edits it, it has no visible effect yet. **Enter** is what commits
+it: reruns the search under the new value and drops you back at
+Results. **Esc** (or Tab) backs out to **Search** instead, discarding
+nothing but not searching either.
 
 - **/** — jump to the search box from anywhere (except from inside
   Preview, see below)
@@ -89,10 +95,14 @@ also returns to Results without searching.
     also jump to start/end
   - **Ctrl+U** kills from the cursor to the start of the line, **Ctrl+K**
     to the end
-  - **Enter** to search, **Esc** to leave the field without losing your query
+  - **Enter** to search; **Esc** clears the box first, and quits outright
+    on an already-empty box (Search is the top of the navigation stack,
+    so there's nowhere else for Esc to back out to)
 - In the **results list**: **↑/↓** (or j/k) to move (the preview pane
-  updates as you go), **Enter** on a result to focus the preview,
-  **n/p** (or PageDown/PageUp) for next/previous page, **q**/**Esc** to quit
+  updates as you go, and every row carries a `>` marker so alignment
+  stays put whether it's the selected one or not), **Enter** on a result
+  to focus the preview, **n/p** (or PageDown/PageUp) for next/previous
+  page, **Tab**/**Esc** back to Search, **q** to quit
 - In the **preview pane**: **↑/↓** (or j/k) to scroll, **/** to type an
   incremental filter over the company's **product list** (matches name or
   brand, live, like ranger's in-pane search — handy when a certificate
@@ -124,6 +134,12 @@ A few things worth knowing if you're poking at the code:
   counter; if you refine your query again before the first request comes
   back, the late response is tagged with the old generation and silently
   dropped instead of overwriting what you're now looking at.
+- **The CO/PR badges track `results_search_mode`, not `search_mode`.**
+  `search_mode` changes live as you cycle the ModeFilter widget with
+  `←`/`→`; `results_search_mode` only updates when a search actually
+  reruns. Without that split, adjusting the filter would visibly
+  re-tag the *already-fetched* results before Enter ever committed
+  anything.
 - **gzip transfer compression** is enabled on the HTTP client — the
   search HTML responses are 30–40KB uncompressed, so this cuts real
   transfer time, on top of the concurrency win above.

@@ -17,7 +17,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Constraint::Length(1),
             Constraint::Length(3),
             Constraint::Min(3),
-            Constraint::Length(1),
+            Constraint::Length(2),
         ])
         .split(f.area());
 
@@ -25,13 +25,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_search_row(f, app, root[1]);
 
     // Ranger-style: results on the left, a live preview of whatever is
-    // highlighted on the right — no separate "open" step.
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-        .split(root[2]);
-    draw_results(f, app, panes[0]);
-    draw_preview(f, app, panes[1]);
+    // highlighted on the right — no separate "open" step. The Preview
+    // pane only earns its space once there's something a selection could
+    // preview; before the first search it'd just be an empty "Nothing
+    // selected yet." box, so Results gets the full width instead (same
+    // idea as talabulilm's single-pane placeholder before searching).
+    if app.searched_once {
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(root[2]);
+        draw_results(f, app, panes[0]);
+        draw_preview(f, app, panes[1]);
+    } else {
+        draw_results(f, app, root[2]);
+    }
 
     draw_status_bar(f, app, root[3]);
 }
@@ -44,7 +52,7 @@ fn draw_title(f: &mut Frame, area: Rect) {
 
     let line = Line::from(vec![
         Span::styled(" cekhalal ", Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD)),
-        Span::raw("  JAKIM MyeHalal directory, from your terminal"),
+        Span::raw("  JAKIM MyeHalal directory"),
     ]);
     f.render_widget(Paragraph::new(line), cols[0]);
 
@@ -89,14 +97,17 @@ fn draw_search_row(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     let search_active = app.focus == Focus::Search;
-    let search_title = match (app.search_mode, search_active) {
-        (SearchMode::Combined, true) => "Search (Enter to run, Esc to leave) \u{2014} companies + products",
-        (SearchMode::Combined, false) => "Search (press / ) \u{2014} companies + products",
-        (SearchMode::Company, true) => "Search company (Enter to run, Esc to leave)",
-        (SearchMode::Company, false) => "Search company (press / )",
-        (SearchMode::Product, true) => "Search product (Enter to run, Esc to leave)",
-        (SearchMode::Product, false) => "Search product (press / )",
+    // A non-empty box clears first on Esc; once empty, Esc moves on to
+    // Results (see handle_key_search) — the title reflects whichever is
+    // about to happen.
+    let esc_hint = if !app.input.is_empty() { "Esc to clear" } else { "Esc to quit" };
+    let label = match app.search_mode {
+        SearchMode::Combined => "Search",
+        SearchMode::Company => "Search company",
+        SearchMode::Product => "Search product",
     };
+    let search_title =
+        if search_active { format!("{label} (Enter to run, {esc_hint})") } else { format!("{label} (press / )") };
     let search = Paragraph::new(text_field_line(&app.input, search_active)).block(
         Block::default()
             .borders(Borders::ALL)
@@ -152,7 +163,7 @@ fn result_badge(kind: ResultKind) -> Span<'static> {
 
 fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     let results_active = app.focus == Focus::Results;
-    let show_badges = app.search_mode == SearchMode::Combined;
+    let show_badges = app.results_search_mode == SearchMode::Combined;
 
     let body: Vec<ListItem> = if app.loading {
         vec![ListItem::new("Searching MyeHalal directory...")]
@@ -163,11 +174,8 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
         )))]
     } else if !app.searched_once {
         vec![ListItem::new(
-            "Type a name and press Enter to search \u{2014} matches both\n\
-             companies and products at once (tagged CO / PR below).\n\
-             Tab switches Search / Results; Enter on a result opens the\n\
-             live preview. Alt+1/2/3 jump to Mode/State/Category to\n\
-             narrow down \u{2014} entirely optional.",
+            "Type a name and press Enter to search\n\
+             \u{2014} companies + products, matched at once and tagged CO / PR below.",
         )]
     } else if app.results.is_empty() {
         vec![ListItem::new("No results for this search.")]
@@ -176,21 +184,26 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
             .iter()
             .map(|r| {
                 let soonest = r.expiry_dates.first().map(String::as_str).unwrap_or("-");
+                // "> " on every row, not just the selected one (via
+                // highlight_symbol, which only draws on the selected
+                // row) — a stable per-row marker rather than something
+                // that only appears once a row happens to be selected.
                 let name_line = if show_badges {
                     Line::from(vec![
+                        Span::raw("> "),
                         result_badge(r.kind),
                         Span::raw(" "),
                         Span::styled(r.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
                     ])
                 } else {
-                    Line::from(Span::styled(r.name.clone(), Style::default().add_modifier(Modifier::BOLD)))
+                    Line::from(vec![Span::raw("> "), Span::styled(r.name.clone(), Style::default().add_modifier(Modifier::BOLD))])
                 };
                 let mut lines = vec![name_line];
                 if !r.address.is_empty() {
                     let prefix = if r.kind == ResultKind::Product { "Company: " } else { "" };
                     lines.push(Line::from(Span::styled(
                         format!("  {prefix}{}", r.address),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
                     )));
                 }
                 if !r.brand.is_empty() {
@@ -232,8 +245,12 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_style(focus_style(results_active))
                 .title(title),
         )
-        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
-        .highlight_symbol("> ");
+        // REVERSED instead of a flat DarkGray background: rows here carry
+        // their own CO/PR badge background (green/magenta), and a fixed
+        // bg color would stomp that, leaving barely-visible black-on-
+        // DarkGray text. REVERSED swaps whatever fg/bg a cell already
+        // has, so the badge stays legible on the selected row too.
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED));
 
     f.render_stateful_widget(list, area, &mut app.list_state);
 }
@@ -248,7 +265,7 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     } else if !filter_text.is_empty() {
         Line::raw(format!("Preview \u{2014} filtered by \"{filter_text}\" (Esc to clear)"))
     } else {
-        Line::raw("Preview  (Enter from Results to focus, / filters products)")
+        Line::raw("Preview (Enter from Results to focus, / filters products)")
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -316,14 +333,14 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
         for (i, p) in matches.iter().enumerate() {
             let brand = if p.brand.is_empty() { String::new() } else { format!(" [{}]", p.brand) };
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:>3}. ", i + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("  {:>3}. ", i + 1), Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM)),
                 Span::raw(p.name.clone()),
                 Span::styled(brand, Style::default().fg(Color::Cyan)),
             ]));
             if !p.expiry.is_empty() {
                 lines.push(Line::from(Span::styled(
                     format!("        expires {}", p.expiry),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
                 )));
             }
         }
@@ -337,21 +354,30 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(p, area);
 }
 
+/// The area is 2 rows tall (matching talabulilm's own status bar height)
+/// even though this is one line of text — a single-row `Paragraph`
+/// doesn't wrap, so anything past the terminal's width would otherwise
+/// be silently clipped; the most important keys (Esc/Enter/Tab/quit) go
+/// first so those survive on a narrow terminal regardless.
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let help = match app.focus {
-        Focus::Search => {
-            "type to search  Alt+\u{2190}/\u{2192} jump word  Alt+Backspace del word  Ctrl+W clear all  Home/End line start/end  Enter search  Tab\u{2192}Results  Alt+1/2/3 Mode/State/Category  Ctrl+C quit"
+        // The must-have core (type to search / Tab / Esc / Alt+←/→
+        // word / Alt+Backspace / Ctrl+C), worded identically to
+        // talabulilm's own Search hint. Enter is already covered by the
+        // search box's own title.
+        // "Tab → Results" only once there's actually a search to switch
+        // to — showing it before that just points at an empty pane.
+        Focus::Search if app.searched_once => {
+            "type to search  Tab \u{2192} Results  Esc clear/quit  Alt+\u{2190}/\u{2192} word  Alt+Backspace del word"
         }
-        Focus::ModeFilter => "\u{2190}/\u{2192} cycle Combined/Company/Product  Enter search\u{2192}Results  Esc/Tab\u{2192}Results",
-        Focus::StateFilter | Focus::CategoryFilter => "\u{2190}/\u{2192} change  Enter search\u{2192}Results  Esc/Tab\u{2192}Results",
-        Focus::Results => {
-            "\u{2191}/\u{2193} move  Enter\u{2192}Preview  n/p page  / search  Alt+1/2/3 Mode/State/Category  Tab\u{2192}Search  q quit"
-        }
+        Focus::Search => "type to search  Esc clear/quit  Alt+\u{2190}/\u{2192} word  Alt+Backspace del word",
+        Focus::ModeFilter | Focus::StateFilter | Focus::CategoryFilter => "\u{2190}/\u{2192} change  Enter search  Tab/Esc back",
+        // n/p paging and Enter → Preview only make sense once there's
+        // actually something to page through or preview.
+        Focus::Results if app.searched_once => "\u{2191}/\u{2193} move  Enter \u{2192} Preview  n/p page  Tab/Esc back  / search",
+        Focus::Results => "\u{2191}/\u{2193} move  Tab/Esc back  / search",
         Focus::Preview if app.product_filter_active => "type to filter products  Enter apply  Esc cancel",
-        Focus::Preview => "\u{2191}/\u{2193} scroll  / filter products  Enter/h/Esc\u{2192}Results  Tab\u{2192}Search  q quit",
+        Focus::Preview => "\u{2191}/\u{2193} scroll  / filter products  Esc/h \u{2192} Results  Tab \u{2192} Search",
     };
-    f.render_widget(
-        Paragraph::new(help).style(Style::default().fg(Color::DarkGray)),
-        area,
-    );
+    f.render_widget(Paragraph::new(help).style(Style::default().fg(Color::DarkGray)), area);
 }

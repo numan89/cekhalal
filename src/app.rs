@@ -81,6 +81,12 @@ pub enum AppEvent {
 pub struct App {
     pub input: TextField,
     pub search_mode: SearchMode,
+    /// The mode actually behind what's on screen — distinct from
+    /// `search_mode`, which changes live as ←/→ cycles through the
+    /// ModeFilter widget. Results (and their CO/PR badges) only reflect
+    /// this once Enter actually reruns the search, so adjusting the
+    /// filter doesn't visibly change anything until it's committed.
+    pub results_search_mode: SearchMode,
     pub state_idx: usize,
     pub category_idx: usize,
     pub focus: Focus,
@@ -122,6 +128,7 @@ impl App {
         Self {
             input: TextField::new(),
             search_mode: SearchMode::Combined,
+            results_search_mode: SearchMode::Combined,
             state_idx: 0,
             category_idx: 0,
             focus: Focus::Search,
@@ -177,6 +184,11 @@ impl App {
                         self.total_records = page.total_records;
                         self.results = page.results;
                         self.searched_once = true;
+                        // A completed search should land you where you can
+                        // immediately move the selection, not leave you
+                        // still typing in the box with an extra Tab needed
+                        // to reach what you just searched for.
+                        self.focus = Focus::Results;
                         if self.results.is_empty() {
                             self.list_state.select(None);
                             self.clear_preview();
@@ -251,6 +263,7 @@ impl App {
         self.search_generation += 1;
         self.loading = true;
         self.error = None;
+        self.results_search_mode = self.search_mode;
         Action::RunSearch
     }
 
@@ -297,10 +310,16 @@ impl App {
 
     fn handle_key_search(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Esc => {
-                self.focus = Focus::Results;
+            // Same "Esc backs out one step at a time" chain as
+            // talabulilm's own Search box: a non-empty box clears first;
+            // an already-empty box quits outright, since Search is the
+            // top of the focus stack here (nothing "above" it to fall
+            // back to short of leaving).
+            KeyCode::Esc if !self.input.is_empty() => {
+                self.input.clear();
                 return Action::None;
             }
+            KeyCode::Esc => return Action::Quit,
             KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = Focus::Results;
                 return Action::None;
@@ -317,7 +336,7 @@ impl App {
 
     fn handle_key_mode_filter(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Results,
+            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Search,
             KeyCode::Left | KeyCode::Char('h') => self.search_mode = self.search_mode.prev(),
             KeyCode::Right | KeyCode::Char('l') => self.search_mode = self.search_mode.next(),
             KeyCode::Enter => {
@@ -332,7 +351,7 @@ impl App {
 
     fn handle_key_state_filter(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Results,
+            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Search,
             KeyCode::Left | KeyCode::Char('h') => {
                 self.state_idx = self.state_idx.checked_sub(1).unwrap_or(STATES.len() - 1);
             }
@@ -352,7 +371,7 @@ impl App {
     fn handle_key_category_filter(&mut self, key: KeyEvent) -> Action {
         let category_locked = self.search_mode == SearchMode::Product;
         match key.code {
-            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Results,
+            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Search,
             KeyCode::Left | KeyCode::Char('h') if !category_locked => {
                 self.category_idx = self.category_idx.checked_sub(1).unwrap_or(CATEGORIES.len() - 1);
             }
@@ -371,8 +390,12 @@ impl App {
 
     fn handle_key_results(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => return Action::Quit,
-            KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Search,
+            KeyCode::Char('q') => return Action::Quit,
+            // Esc now backs out to Search (same as Tab) rather than
+            // quitting — quitting from here lives on 'q' only. Search's
+            // own Esc-on-empty-box is where the app actually exits, so
+            // Results doesn't need a second, different quit trigger.
+            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::Search,
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Enter => {
